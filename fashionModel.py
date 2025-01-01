@@ -3,15 +3,27 @@ import base64
 import json
 import re
 import pickle
+import logging
 from PIL import Image
 from io import BytesIO
-from groq import Groq
 from tqdm import tqdm
 from pydantic import BaseModel
 from typing import List
+from groq import Groq
 
+# Initialize logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-#Class holding schema
+# Define constants
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png')
+IMAGE_FOLDER = r"E:\VSCode\FashionModelProject\ClothingAttributeDataset\images"
+OUTPUT_FOLDER = r"E:\VSCode\FashionModelProject\processedData"
+GROQ_API_KEY = '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'
+
+# Initialize the GROQ client
+client = Groq(api_key=GROQ_API_KEY)
+
+# Schema classes
 class FashionBaseModel(BaseModel):
     clothing_category: str
     color: str
@@ -19,114 +31,105 @@ class FashionBaseModel(BaseModel):
     suitable_for_weather: str
     description: str
 
-#Class with a list of objects
 class FashionModel(BaseModel):
     clothes: List[FashionBaseModel]
 
-#Initialize the GROQ client with API key
-client = Groq(api_key='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')
+# Ensure output directory exists
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+logging.info(f"Output directory '{OUTPUT_FOLDER}' is ready.")
 
-#Path to the folder containing images
-image_folder = r"E:\VSCode\FashionModelProject\ClothingAttributeDataset\images"
+# Helper function: Get image files
+def get_image_files(folder: str, extensions: tuple) -> List[str]:
+    return [f for f in os.listdir(folder) if f.endswith(extensions)]
 
-#Path to the folder where features will be saved
-output_folder = r"E:\VSCode\FashionModelProject\processedData"
-
-#Create the output directory if it doesn't exist
-if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
-    print(f"Directory '{output_folder}' created successfully.")
-else:
-    print(f"Directory '{output_folder}' already exists.")
-
-#Prepare a list of image files
-image_files = [f for f in os.listdir(image_folder) if f.endswith(('.jpg', '.jpeg', '.png'))]
-
-#Function to extract JSON object from the API response
-def extract_json_from_response(response):
-    """Extract the JSON object from the API response."""
+# Helper function: Extract JSON from response
+def extract_json_from_response(response: str) -> dict:
     try:
-        #Use regex to extract the JSON-like structure
         json_match = re.search(r"\{.*\}", response, re.DOTALL)
         if json_match:
             return json.loads(json_match.group(0))
     except json.JSONDecodeError as e:
-        print(f"JSON decoding failed: {e}")
+        logging.error(f"JSON decoding failed: {e}")
     return None
 
-#Function to save data to a .pkl file
-def save_to_pkl(data, file_path):
-    """Save the given data to a .pkl file."""
+# Helper function: Save data to file
+def save_to_file(data, file_path: str, mode='json'):
     try:
-        with open(file_path, 'wb') as pkl_file:
-            pickle.dump(data, pkl_file)
-        print(f"Data saved to '{file_path}'.")
+        if mode == 'json':
+            with open(file_path, 'w') as output_file:
+                json.dump(data, output_file, indent=4)
+        elif mode == 'pkl':
+            with open(file_path, 'wb') as pkl_file:
+                pickle.dump(data, pkl_file)
+        logging.info(f"Data saved to '{file_path}'.")
     except Exception as e:
-        print(f"Failed to save to .pkl: {e}")
+        logging.error(f"Failed to save data to '{file_path}': {e}")
 
-#Dictionary to store all features for a single .pkl file
-all_features = {}
+# Main process
+def process_images():
+    image_files = get_image_files(IMAGE_FOLDER, IMAGE_EXTENSIONS)
+    if not image_files:
+        logging.error("No image files found. Exiting...")
+        return
 
-#Use tqdm to create a progress bar, buffering the image into ram and chaning it to base64(string)
-for filename in tqdm(image_files, desc="Processing Images"):
-    image_path = os.path.join(image_folder, filename)
-    image = Image.open(image_path)
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG")
-    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    all_features = {}
 
-    #Prompt request with schema
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"""You are an expert in fashion and clothes, you feature extract clothes within images. Return JSON output only if it validates against the provided schema. Do not generate schemas, or anything other than a JSON array of clothing features. The JSON object must use the schema: {json.dumps(FashionModel.model_json_schema(), indent=2)}"""},
+    for filename in tqdm(image_files, desc="Processing Images"):
+        try:
+            image_path = os.path.join(IMAGE_FOLDER, filename)
+            with Image.open(image_path) as image:
+                buffered = BytesIO()
+                image.save(buffered, format="JPEG")
+                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+            # Create prompt messages
+            messages = [
                 {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}",
-                    },
-                },
-            ],
-        }
-    ]
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"""You are an expert in fashion and clothes. Extract clothing features from the image. 
+                            Return JSON output only if it validates against the provided schema. 
+                            The JSON object must use the schema: {json.dumps(FashionModel.model_json_schema(), indent=2)}."""},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                        },
+                    ],
+                }
+            ]
 
-    #Determines the response. Example: temp is creativity, stream: determines whether the response is delivered in chunks or all at once.
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=messages,
-            temperature=1,
-            max_tokens=1024,
-            stream=False,
-            stop=None,
-            response_format={"type": "json_object"}
-        )
+            # API call
+            completion = client.chat.completions.create(
+                model="llama-3.2-11b-vision-preview",
+                messages=messages,
+                temperature=1,
+                max_tokens=1024,
+                stream=False,
+                response_format={"type": "json_object"}
+            )
 
-        #Extract raw response
-        response = completion.choices[0].message.content
-        print(f"Raw API response for {filename}: {response}")
+            # Process response
+            response = completion.choices[0].message.content
+            logging.info(f"Raw API response for {filename}: {response}")
+            features = extract_json_from_response(response)
+            if not features:
+                logging.warning(f"No valid features extracted for {filename}. Skipping...")
+                continue
 
-        #Extract and validate JSON
-        features = extract_json_from_response(response)
-        if not features:
-            print(f"Could not extract valid JSON for {filename}. Skipping...")
-            continue
+            # Save individual JSON
+            json_output_file = os.path.join(OUTPUT_FOLDER, f"{os.path.splitext(filename)[0]}.json")
+            save_to_file(features, json_output_file, mode='json')
 
-        print(f"Formatted features for image {filename}: {features}")
+            # Aggregate features
+            all_features[filename] = features
 
-        #Save to JSON file
-        json_output_file = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}.json")
-        with open(json_output_file, 'w') as output_file:
-            json.dump(features, output_file, indent=4)
-        print(f"Features saved to '{json_output_file}'.")
+        except Exception as e:
+            logging.error(f"Error processing image {filename}: {e}")
 
-        #Save to PKL file
-        all_features[filename] = features
+    # Save all features to a single file
+    pkl_output_file = os.path.join(OUTPUT_FOLDER, "all_features.pkl")
+    save_to_file(all_features, pkl_output_file, mode='pkl')
 
-    except Exception as e:
-        print(f"An error occurred while processing image {filename}: {e}")
-
-#Save all features to a single .pkl file
-pkl_output_file = os.path.join(output_folder, "all_features.pkl")
-save_to_pkl(all_features, pkl_output_file)
+# Entry point
+if __name__ == "__main__":
+    process_images()
