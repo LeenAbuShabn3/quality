@@ -1,49 +1,50 @@
-name: Python Performance Tests
+name: Performance Tracking
 
-# Triggers
 on:
   push:
     branches:
-      - main  # Runs on push to the main branch
+      - main
   pull_request:
     branches:
-      - main  # Runs on pull requests targeting the main branch
+      - main
 
 jobs:
   performance-test:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout code
+    # Step 1: Checkout the code
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # Step 2: Set up Python
-    - name: Set up Python
-      uses: actions/setup-python@v3
+    # Step 2: Setup Python
+    - name: Setup Python
+      uses: actions/setup-python@v4
       with:
-        python-version: '3.x'  # Use the appropriate Python version
+        python-version: '3.9'
 
     # Step 3: Install dependencies
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-benchmark
+        pip install -r requirements.txt
+        pip install memory-profiler pytest-benchmark
 
-    # Step 4: Run performance tests
-    - name: Run Performance Tests
+    # Step 4: Run the script and track performance
+    - name: Run performance test
       run: |
-        pytest --benchmark-only --benchmark-json=benchmark_results.json
+        # Time tracking
+        /usr/bin/time -v python your_script.py > performance_log.txt 2>&1
+        
+        # Memory profiling
+        mprof run python your_script.py
+        mprof plot --output memory_profile.png
 
-    # Step 5: Upload performance report as an artifact
-    - name: Upload Performance Report
+    # Step 5: Upload logs and results as artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: performance-reports
-        path: benchmark_results.json
-
-    # Step 6: Display performance results in logs
-    - name: Display Performance Results
-      run: |
-        echo "Performance results:"
-        cat benchmark_results.json
+        name: performance-results
+        path: |
+          performance_log.txt
+          memory_profile.png
