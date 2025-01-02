@@ -1,0 +1,7 @@
+
+pillow
+tqdm
+pydantic
+memory-profiler
+pytest-benchmark
+groq
