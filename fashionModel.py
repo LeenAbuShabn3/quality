@@ -13,7 +13,7 @@ from groq import Groq
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
+#hiiiiiiiiiiiiiiii
 # Define constants
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 IMAGE_FOLDER = r"E:\VSCode\FashionModelProject\ClothingAttributeDataset\images"
